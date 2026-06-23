@@ -23,7 +23,32 @@ This module only adds the parts that live *outside* the Noise state machine:
 
 `InitiatorSession` and `ResponderSession` cover both ends of the handshake.
 
-## Interoperability test
+## The VPN device
+
+`Device` (in `Device.fs`) is a full WireGuard endpoint built on the handshake above.
+It manages, for every peer:
+
+* the **session lifecycle** — handshake on demand when there is traffic, key split
+  into transport `CipherState`s, current/previous keypairs, and rekeying;
+* the **timer state machine** — handshake retransmission (every `REKEY_TIMEOUT`, up to
+  `REKEY_ATTEMPT_TIME`), passive and persistent keepalives, and session expiry;
+* **index demultiplexing** — a receiver-index table routes responses and transport
+  records to the right peer/session;
+* **anti-replay** — a sliding counter window per receiving keypair;
+* **routing** — outbound IP packets are matched to a peer by allowed-IPs, inbound
+  packets are checked against them.
+
+The data plane is abstracted behind two interfaces in `Adapters.fs`:
+
+* `ITunnel` — a source/sink of IP packets. Default: `LinuxTun` (a `/dev/net/tun`
+  device via `ioctl`). `MockTunnel` is an in-memory one for tests.
+* `IBind` — the UDP transport. Default: `UdpBind` over a socket.
+
+What is **not** implemented: the cookie reply (type 3) DoS-mitigation path — `mac1`
+is computed and verified, but `mac2` is always zero and incoming cookie replies are
+ignored (this only matters when a peer is under load).
+
+## Interoperability tests
 
 `tests/wg-interop/run-interop.sh` stands up a userland **wireguard-go** instance,
 configures it through its UAPI socket (no `wg` tool needed), and then runs the F#
@@ -48,12 +73,16 @@ Expected tail:
 <- received encrypted ICMP echo reply from 10.0.0.1 — round trip through the tunnel OK
 ```
 
-A network-free F#↔F# handshake + transport check also runs as part of `dotnet test`
-(`WireGuardTests.fs`).
+`tests/wg-interop/run-vpn-interop.sh` goes further: it runs the full F# **device**
+(with a real Linux TUN) in the root namespace and wireguard-go in a separate network
+namespace, then sends a real `ping` through the tunnel:
 
-## Scope
+```
+== ping 10.66.0.2 through the F# WireGuard tunnel ==
+3 packets transmitted, 3 received, 0% packet loss
+RESULT: SUCCESS — ping traversed the F# WireGuard data plane
+```
 
-This is a focused, correct implementation of the WireGuard **cryptographic protocol**
-(handshake + transport records), suitable for interop and study. It is not a full VPN:
-it does not implement the cookie/DoS-mitigation reply (type 3), the timer state machine
-(rekeying, keepalives, handshake retries), or a TUN/routing data plane.
+Network-free checks also run under `dotnet test`: a handshake + transport check
+(`WireGuardTests.fs`) and a two-device data-plane exchange over loopback with mock
+tunnels (`DeviceTests.fs`).

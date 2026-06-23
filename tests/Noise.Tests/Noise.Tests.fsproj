@@ -12,6 +12,7 @@
     <Compile Include="FallbackTests.fs" />
     <Compile Include="HfsTests.fs" />
     <Compile Include="WireGuardTests.fs" />
+    <Compile Include="DeviceTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

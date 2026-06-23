@@ -70,6 +70,42 @@ let keygen () =
     printfn "%s %s %s %s" (hex i.PrivateKey) (hex i.PublicKey) (hex r.PrivateKey) (hex r.PublicKey)
     0
 
+/// genkey -> prints one "priv pub" keypair (hex).
+let genkey () =
+    let k = Noise.generateKeyPair "25519"
+    printfn "%s %s" (hex k.PrivateKey) (hex k.PublicKey)
+    0
+
+/// vpn <tun> <listenPort> <privHex> <peerPubHex> <peerEndpoint ip:port> <allowedCidr>
+/// Run a full WireGuard device over a real TUN device until killed.
+let vpn (argv: string[]) =
+    let tunName = argv.[0]
+    let port = int argv.[1]
+    let priv = fromHex argv.[2]
+    let peerPub = fromHex argv.[3]
+    let peerEndpoint =
+        let p = argv.[4].Split(':')
+        IPEndPoint(IPAddress.Parse p.[0], int p.[1])
+    let allowed =
+        let p = argv.[5].Split('/')
+        IPAddress.Parse p.[0], int p.[1]
+    let tun = LinuxTun(tunName, 1420) :> ITunnel
+    let bind = UdpBind port
+    let config: DeviceConfig =
+        { PrivateKey = priv
+          Peers =
+            [ { PublicKey = peerPub
+                PresharedKey = None
+                Endpoint = Some peerEndpoint
+                AllowedIps = [ allowed ]
+                PersistentKeepalive = 25 } ]
+          Log = Some(eprintfn "[wg] %s") }
+    let device = Device(config, tun, bind :> IBind)
+    device.Start()
+    eprintfn "[wg] device up: tun=%s udp/%d pub=%s -> peer %O" tunName port (hex device.PublicKey) peerEndpoint
+    Threading.Thread.Sleep Threading.Timeout.Infinite
+    0
+
 /// wg-config <sockPath> <devPrivHex> <listenPort> <peerPubHex> <allowedIp/cidr>
 /// Configures a running wireguard-go device through its UAPI unix socket (no `wg` tool).
 let wgConfig (argv: string[]) =
@@ -156,8 +192,10 @@ let connect (argv: string[]) =
 let main argv =
     match Array.toList argv with
     | "keygen" :: _ -> keygen ()
+    | "genkey" :: _ -> genkey ()
     | "wg-config" :: rest -> wgConfig (List.toArray rest)
     | "connect" :: rest -> connect (List.toArray rest)
+    | "vpn" :: rest -> vpn (List.toArray rest)
     | _ ->
-        eprintfn "usage: WgInterop (keygen | wg-config ... | connect ...)"
+        eprintfn "usage: WgInterop (keygen | genkey | wg-config ... | connect ... | vpn ...)"
         2

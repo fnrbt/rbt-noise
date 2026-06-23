@@ -67,6 +67,10 @@ module Protocol =
     let mac1Key (peerStaticPublic: byte[]) =
         Primitives.blake2s.Hash(Array.append (ascii LabelMac1) peerStaticPublic)
 
+    /// The 16-byte mac1 over a message body, keyed by the recipient's static key.
+    let mac1 (recipientStaticPublic: byte[]) (data: byte[]) =
+        blake2sKeyed (mac1Key recipientStaticPublic) 16 data
+
     /// WireGuard's TAI64N timestamp (12 bytes): a 64-bit big-endian TAI seconds count
     /// followed by a 32-bit big-endian nanoseconds count. Used for replay protection.
     let timestamp () =

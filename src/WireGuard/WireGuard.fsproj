@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <Compile Include="WireGuard.fs" />
+    <Compile Include="Adapters.fs" />
+    <Compile Include="Device.fs" />
   </ItemGroup>
 
   <ItemGroup>
