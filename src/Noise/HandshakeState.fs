@@ -124,10 +124,11 @@ type HandshakeState
     /// bytes and, if this was the final message, the resulting Transport.
     member _.WriteMessage(payload: byte[]) : byte[] * Transport option =
         if messageIndex >= messages.Length then invalidOp "Noise: handshake already complete"
-        if initiator <> (messageIndex % 2 = 0) then invalidOp "Noise: not this party's turn to write"
+        let fromInitiator, tokens = messages.[messageIndex]
+        if fromInitiator <> initiator then invalidOp "Noise: not this party's turn to write"
 
         let buffer = System.Collections.Generic.List<byte>()
-        for token in messages.[messageIndex] do
+        for token in tokens do
             match token with
             | E ->
                 let kp =
@@ -152,7 +153,8 @@ type HandshakeState
     /// this was the final message, the resulting Transport.
     member _.ReadMessage(message: byte[]) : byte[] * Transport option =
         if messageIndex >= messages.Length then invalidOp "Noise: handshake already complete"
-        if initiator <> (messageIndex % 2 = 1) then invalidOp "Noise: not this party's turn to read"
+        let fromInitiator, tokens = messages.[messageIndex]
+        if fromInitiator = initiator then invalidOp "Noise: not this party's turn to read"
 
         let mutable offset = 0
         let read n =
@@ -161,7 +163,7 @@ type HandshakeState
             offset <- offset + n
             chunk
 
-        for token in messages.[messageIndex] do
+        for token in tokens do
             match token with
             | E ->
                 let pub = read dh.DhLen
