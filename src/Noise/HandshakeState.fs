@@ -34,6 +34,13 @@ type Transport internal (c1: CipherState, c2: CipherState, initiator: bool, oneW
     /// REKEY the incoming CipherState.
     member _.RekeyIncoming() = receiving.Rekey()
 
+    /// The outgoing CipherState. Exposed for protocols (such as WireGuard) that carry
+    /// an explicit per-message counter on the wire rather than an implicit running nonce.
+    member _.SendingCipherState = sending
+
+    /// The incoming CipherState.
+    member _.ReceivingCipherState = receiving
+
 
 /// HandshakeState (section 5.3 of the spec). Drives a handshake to completion via
 /// alternating WriteMessage / ReadMessage calls; the side whose turn it is calls

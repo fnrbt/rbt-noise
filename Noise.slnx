@@ -1,6 +1,10 @@
 <Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/WgInterop/WgInterop.fsproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Noise/Noise.fsproj" />
+    <Project Path="src/WireGuard/WireGuard.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Noise.Tests/Noise.Tests.fsproj" />

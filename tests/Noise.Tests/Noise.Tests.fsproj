@@ -10,6 +10,7 @@
     <Compile Include="SelfConsistencyTests.fs" />
     <Compile Include="VectorTests.fs" />
     <Compile Include="FallbackTests.fs" />
+    <Compile Include="WireGuardTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -26,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Noise\Noise.fsproj" />
+    <ProjectReference Include="..\..\src\WireGuard\WireGuard.fsproj" />
   </ItemGroup>
 
 </Project>
