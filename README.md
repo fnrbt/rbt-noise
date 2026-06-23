@@ -14,17 +14,16 @@ AES-GCM, SHA-256/512, BLAKE2s/BLAKE2b).
 | One-way patterns | `N` `K` `X` |
 | Interactive patterns | `NN` `NK` `NX` `XN` `XK` `XX` `KN` `KK` `KX` `IN` `IK` `IX` |
 | Deferred patterns | all 23 (`NK1`, `X1X`, `IK1`, `K1K1`, …) |
-| Modifiers | PSK (`psk0` … `pskN`, including combinations such as `psk0+psk2`) and `fallback` (Noise Pipes) |
+| Modifiers | PSK (`psk0` … `pskN`, incl. combinations like `psk0+psk2`), `fallback` (Noise Pipes), and `hfs` (hybrid forward secrecy) |
 | DH | `25519`, `448` |
+| Hybrid KEM (HFS) | `448` (DH-as-KEM) and `MLKEM768` (post-quantum, FIPS 203) |
 | Cipher | `ChaChaPoly`, `AESGCM` |
 | Hash | `SHA256`, `SHA512`, `BLAKE2s`, `BLAKE2b` |
 
 From-scratch building blocks: `CipherState`, `SymmetricState`, `HandshakeState`,
-HKDF, HMAC, nonce encoding, REKEY, pattern/protocol-name parsing, and the transport
-split.
-
-Not implemented: the `hfs` (hybrid forward secrecy) modifier, which is a separate
-draft extension requiring a post-quantum KEM primitive.
+HKDF, HMAC, nonce encoding, REKEY, the `f`/`ff` HFS tokens, pattern/protocol-name
+parsing, and the transport split. HFS protocols name the KEM in the DH field, e.g.
+`Noise_XXhfs_25519+MLKEM768_ChaChaPoly_SHA256`.
 
 A worked example of the framework's reach lives in [`src/WireGuard`](src/WireGuard):
 WireGuard's handshake is exactly `Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s`, built here

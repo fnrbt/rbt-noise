@@ -3,16 +3,22 @@ namespace Noise
 open System.Text
 open Noise.Primitives
 
-/// The four function-set names parsed out of a Noise protocol name.
+/// The function-set names parsed out of a Noise protocol name.
 type ProtocolName =
     { Pattern: string
       Dh: string
+      /// The hybrid KEM, for HFS protocols whose DH field is "<dh>+<kem>" (e.g. "25519+448").
+      Hybrid: string option
       Cipher: string
       Hash: string }
 
     /// Render back to the canonical "Noise_<pattern>_<dh>_<cipher>_<hash>" string.
     override this.ToString() =
-        sprintf "Noise_%s_%s_%s_%s" this.Pattern this.Dh this.Cipher this.Hash
+        let dh =
+            match this.Hybrid with
+            | Some h -> sprintf "%s+%s" this.Dh h
+            | None -> this.Dh
+        sprintf "Noise_%s_%s_%s_%s" this.Pattern dh this.Cipher this.Hash
 
 /// Keys and PSKs supplied to a handshake. Use HandshakeKeys.empty and override the
 /// fields the chosen pattern requires; omitted keys that the pattern needs will
@@ -28,14 +34,18 @@ type HandshakeKeys =
       /// The remote ephemeral public key (re), for fallback-style setups.
       RemoteEphemeral: byte[] option
       /// Pre-shared keys, in the order the psk modifiers consume them.
-      Psks: byte[] list }
+      Psks: byte[] list
+      /// A fixed local hybrid (KEM) ephemeral for HFS. Normally None — generated as
+      /// needed. Provided to reproduce HFS test vectors deterministically.
+      LocalHybridEphemeral: KemKeyPair option }
 
     static member empty =
         { LocalStatic = None
           LocalEphemeral = None
           RemoteStatic = None
           RemoteEphemeral = None
-          Psks = [] }
+          Psks = []
+          LocalHybridEphemeral = None }
 
 /// Top-level entry point for the library.
 [<RequireQualifiedAccess>]
@@ -46,7 +56,12 @@ module Noise =
         let parts = name.Split('_')
         if parts.Length <> 5 || parts.[0] <> "Noise" then
             failwithf "Invalid Noise protocol name: %s" name
-        { Pattern = parts.[1]; Dh = parts.[2]; Cipher = parts.[3]; Hash = parts.[4] }
+        let dh, hybrid =
+            match parts.[2].Split('+') with
+            | [| d |] -> d, None
+            | [| d; h |] -> d, Some h
+            | _ -> failwithf "Invalid DH field: %s" parts.[2]
+        { Pattern = parts.[1]; Dh = dh; Hybrid = hybrid; Cipher = parts.[3]; Hash = parts.[4] }
 
     /// Generate a fresh static key pair for the named DH function ("25519" or "448").
     let generateKeyPair (dhName: string) : KeyPair = (resolveDh dhName).GenerateKeyPair()
@@ -62,6 +77,7 @@ module Noise =
         let dh = resolveDh parsed.Dh
         let cipher = resolveCipher parsed.Cipher
         let hash = resolveHash parsed.Hash
+        let kem = parsed.Hybrid |> Option.map resolveKem
         let protocolBytes = Encoding.ASCII.GetBytes protocolName
 
         HandshakeState(
@@ -77,5 +93,7 @@ module Noise =
             keys.LocalEphemeral,
             keys.RemoteStatic,
             keys.RemoteEphemeral,
-            keys.Psks
+            keys.Psks,
+            kem,
+            keys.LocalHybridEphemeral
         )

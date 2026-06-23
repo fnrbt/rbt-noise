@@ -61,7 +61,9 @@ type HandshakeState
         localEphemeral: KeyPair option,
         remoteStatic: byte[] option,
         remoteEphemeral: byte[] option,
-        psks: byte[] list
+        psks: byte[] list,
+        kem: Kem option,
+        localHybridEphemeral: KemKeyPair option
     ) =
 
     let symmetric = SymmetricState(cipher, hash)
@@ -71,6 +73,14 @@ type HandshakeState
     let mutable rs = remoteStatic
     let mutable re = remoteEphemeral
     let mutable messageIndex = 0
+
+    // HFS (f/ff token) state. The party that sends `f` first generates a keypair (set
+    // in hybridKeyPair); the other party encapsulates to it. localHybridEphemeral, when
+    // provided, fixes our keypair/encapsulation ephemeral for deterministic test vectors.
+    let mutable hybridKeyPair: KemKeyPair option = None
+    let mutable hybridRemotePublic: byte[] option = None
+    let mutable hybridShared: byte[] option = None
+    let getKem () = match kem with Some k -> k | None -> failwith "Noise: pattern uses HFS but no KEM was provided"
 
     let messages = List.toArray pattern.Messages
     let oneWay = messages.Length = 1
@@ -151,6 +161,20 @@ type HandshakeState
             | S -> buffer.AddRange(symmetric.EncryptAndHash (Option.get s).PublicKey)
             | EE | ES | SE | SS -> mixDh token
             | PSK -> symmetric.MixKeyAndHash(pskQueue.Dequeue())
+            | F ->
+                let k = getKem ()
+                match hybridRemotePublic with
+                | None ->
+                    // We send the KEM public key (we initiate the KEM exchange).
+                    let kp = localHybridEphemeral |> Option.defaultWith k.GenerateKeyPair
+                    hybridKeyPair <- Some kp
+                    buffer.AddRange(symmetric.EncryptAndHash kp.Public)
+                | Some remote ->
+                    // We encapsulate to the peer's KEM public key.
+                    let result = k.Encapsulate remote localHybridEphemeral
+                    hybridShared <- Some result.Shared
+                    buffer.AddRange(symmetric.EncryptAndHash result.Ciphertext)
+            | FF -> symmetric.MixKey(Option.get hybridShared)
 
         buffer.AddRange(symmetric.EncryptAndHash payload)
         messageIndex <- messageIndex + 1
@@ -182,6 +206,18 @@ type HandshakeState
                 rs <- Some(symmetric.DecryptAndHash(read len))
             | EE | ES | SE | SS -> mixDh token
             | PSK -> symmetric.MixKeyAndHash(pskQueue.Dequeue())
+            | F ->
+                let k = getKem ()
+                let tag = if symmetric.HasKey then 16 else 0
+                match hybridKeyPair with
+                | None ->
+                    // We receive the peer's KEM public key (they initiate the exchange).
+                    hybridRemotePublic <- Some(symmetric.DecryptAndHash(read (k.PublicKeyLen + tag)))
+                | Some kp ->
+                    // We receive a ciphertext and decapsulate it.
+                    let ciphertext = symmetric.DecryptAndHash(read (k.CiphertextLen + tag))
+                    hybridShared <- Some(k.Decapsulate kp.Private ciphertext)
+            | FF -> symmetric.MixKey(Option.get hybridShared)
 
         let payload = symmetric.DecryptAndHash message.[offset..]
         messageIndex <- messageIndex + 1

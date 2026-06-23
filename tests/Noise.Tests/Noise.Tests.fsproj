@@ -10,12 +10,14 @@
     <Compile Include="SelfConsistencyTests.fs" />
     <Compile Include="VectorTests.fs" />
     <Compile Include="FallbackTests.fs" />
+    <Compile Include="HfsTests.fs" />
     <Compile Include="WireGuardTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="vectors\cacophony.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Include="vectors\fallback.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="vectors\hybrid.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

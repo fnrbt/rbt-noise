@@ -4,7 +4,8 @@ namespace Noise
 /// with modifiers (e.g. "XXpsk3", "XXfallback").
 module Patterns =
 
-    /// A handshake token.
+    /// A handshake token. F and FF are the HFS (hybrid forward secrecy) tokens:
+    /// F sends a hybrid KEM public key or ciphertext, FF mixes in the KEM shared secret.
     type Token =
         | E
         | S
@@ -13,6 +14,8 @@ module Patterns =
         | SE
         | SS
         | PSK
+        | F
+        | FF
 
     /// A pre-message line. `FromInitiator` is true for "-> ..." and false for "<- ...".
     type PreMessage =
@@ -102,6 +105,22 @@ module Patterns =
         else failwithf "psk%d is out of range for pattern %s" index pattern.Name
         { pattern with Messages = msgs |> Array.map (fun (dir, r) -> dir, List.ofSeq r) |> List.ofArray }
 
+    /// Apply the `hfs` (hybrid forward secrecy) modifier: insert an `f` token after
+    /// every `e`, and an `ff` token after the first `ee`. This adds one KEM exchange
+    /// (initiator public key, responder ciphertext) running alongside the DH handshake.
+    let applyHfs (pattern: HandshakePattern) : HandshakePattern =
+        let mutable ffDone = false
+        let expand tokens =
+            tokens
+            |> List.collect (fun t ->
+                match t with
+                | E -> [ E; F ]
+                | EE when not ffDone ->
+                    ffDone <- true
+                    [ EE; FF ]
+                | other -> [ other ])
+        { pattern with Messages = pattern.Messages |> List.map (fun (dir, toks) -> dir, expand toks) }
+
     /// Apply the `fallback` modifier (section 10.2): the first message must be sent by the
     /// initiator; its tokens are moved into the initiator's pre-message, so the responder
     /// now sends the first remaining message. Used to build Noise Pipes (e.g. XXfallback).
@@ -132,6 +151,8 @@ module Patterns =
             for modifier in modifierPart.Split('+') do
                 if modifier = "fallback" then
                     pattern <- applyFallback pattern
+                elif modifier = "hfs" then
+                    pattern <- applyHfs pattern
                 elif modifier.StartsWith "psk" then
                     match System.Int32.TryParse(modifier.Substring 3) with
                     | true, n ->

@@ -6,6 +6,8 @@ open Org.BouncyCastle.Crypto.Agreement
 open Org.BouncyCastle.Crypto.Digests
 open Org.BouncyCastle.Crypto.Modes
 open Org.BouncyCastle.Crypto.Engines
+open Org.BouncyCastle.Crypto.Generators
+open Org.BouncyCastle.Crypto.Kems
 open Org.BouncyCastle.Security
 
 /// A Diffie-Hellman key pair. Both keys are raw little-endian byte encodings
@@ -35,6 +37,35 @@ type Cipher =
       Decrypt: byte[] -> uint64 -> byte[] -> byte[] -> byte[]
       /// REKEY(k).
       Rekey: byte[] -> byte[] }
+
+/// A key-encapsulation key pair (for hybrid forward secrecy).
+type KemKeyPair =
+    { Private: byte[]
+      Public: byte[] }
+
+/// The result of a KEM encapsulation: a ciphertext to transmit and the shared secret.
+type KemResult =
+    { Ciphertext: byte[]
+      Shared: byte[] }
+
+/// A key-encapsulation mechanism, used by the Noise HFS extension (the `f`/`ff`
+/// tokens). A Diffie-Hellman function can be adapted into one (ephemeral key as the
+/// "ciphertext", DH output as the shared secret); a true post-quantum KEM fits too.
+type Kem =
+    { Name: string
+      /// Length of an encapsulation public key (the initiator's `f`).
+      PublicKeyLen: int
+      /// Length of a ciphertext (the responder's `f`).
+      CiphertextLen: int
+      /// Generate a fresh key pair (the initiator's hybrid keypair).
+      GenerateKeyPair: unit -> KemKeyPair
+      /// Reconstruct a key pair from a private key (for deterministic test vectors).
+      KeyPairFromPrivate: byte[] -> KemKeyPair
+      /// Encapsulate to a public key. The optional key pair lets DH-based KEMs use a
+      /// fixed ephemeral for test vectors; true KEMs ignore it.
+      Encapsulate: byte[] -> KemKeyPair option -> KemResult
+      /// Decapsulate a ciphertext with a private key, recovering the shared secret.
+      Decapsulate: byte[] -> byte[] -> byte[] }
 
 /// A Noise hash function set (section 4.3 of the spec), together with the
 /// HMAC and HKDF constructions Noise builds on top of it.
@@ -223,3 +254,61 @@ module Primitives =
         | "BLAKE2s" -> blake2s
         | "BLAKE2b" -> blake2b
         | name -> failwithf "Unknown hash function: %s" name
+
+    // ----------------------------------------------------------------------
+    // Key-encapsulation mechanisms (for HFS)
+    // ----------------------------------------------------------------------
+
+    /// Adapt a DH function into a KEM: the "ciphertext" is an ephemeral public key
+    /// and the shared secret is the DH output. This is how Noise HFS treats a DH
+    /// (e.g. "25519+448" uses 448 as the hybrid KEM).
+    let dhAsKem (dh: Dh) : Kem =
+        let mk (kp: KeyPair) = { Private = kp.PrivateKey; Public = kp.PublicKey }
+        { Name = dh.Name
+          PublicKeyLen = dh.DhLen
+          CiphertextLen = dh.DhLen
+          GenerateKeyPair = fun () -> mk (dh.GenerateKeyPair())
+          KeyPairFromPrivate = fun priv -> mk (dh.KeyPairFromPrivate priv)
+          Encapsulate =
+            fun remotePublic ephemeral ->
+                let eph = ephemeral |> Option.defaultWith (fun () -> mk (dh.GenerateKeyPair()))
+                { Ciphertext = eph.Public; Shared = dh.Agreement eph.Private remotePublic }
+          Decapsulate = fun privateKey ciphertext -> dh.Agreement privateKey ciphertext }
+
+    /// ML-KEM-768 (FIPS 203, the standardised CRYSTALS-Kyber) as a post-quantum KEM
+    /// for HFS. Used in protocol names as the hybrid component "MLKEM768".
+    let mlKem768: Kem =
+        let parameters = MLKemParameters.ml_kem_768
+        { Name = "MLKEM768"
+          PublicKeyLen = 1184 // ML-KEM-768 encapsulation key size
+          CiphertextLen = 1088 // ML-KEM-768 ciphertext size
+          GenerateKeyPair =
+            fun () ->
+                let gen = MLKemKeyPairGenerator()
+                gen.Init(MLKemKeyGenerationParameters(rng, parameters))
+                let kp = gen.GenerateKeyPair()
+                { Private = (kp.Private :?> MLKemPrivateKeyParameters).GetEncoded()
+                  Public = (kp.Public :?> MLKemPublicKeyParameters).GetEncoded() }
+          KeyPairFromPrivate = fun _ -> failwith "ML-KEM does not support reconstructing a key pair from a private key"
+          Encapsulate =
+            fun remotePublic _ ->
+                let enc = MLKemEncapsulator(parameters)
+                enc.Init(ParametersWithRandom(MLKemPublicKeyParameters.FromEncoding(parameters, remotePublic), rng))
+                let ciphertext = Array.zeroCreate enc.EncapsulationLength
+                let secret = Array.zeroCreate enc.SecretLength
+                enc.Encapsulate(ciphertext, 0, ciphertext.Length, secret, 0, secret.Length)
+                { Ciphertext = ciphertext; Shared = secret }
+          Decapsulate =
+            fun privateKey ciphertext ->
+                let dec = MLKemDecapsulator(parameters)
+                dec.Init(MLKemPrivateKeyParameters.FromEncoding(parameters, privateKey))
+                let secret = Array.zeroCreate dec.SecretLength
+                dec.Decapsulate(ciphertext, 0, ciphertext.Length, secret, 0, secret.Length)
+                secret }
+
+    let resolveKem =
+        function
+        | "25519" -> dhAsKem dh25519
+        | "448" -> dhAsKem dh448
+        | "MLKEM768" -> mlKem768
+        | name -> failwithf "Unknown hybrid (KEM) function: %s" name

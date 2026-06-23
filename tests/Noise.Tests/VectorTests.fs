@@ -67,13 +67,15 @@ let private runVector (v: Vector) : string option =
               LocalEphemeral = v.InitEphemeral |> Option.map kp
               RemoteStatic = v.InitRemoteStatic
               RemoteEphemeral = None
-              Psks = v.InitPsks }
+              Psks = v.InitPsks
+              LocalHybridEphemeral = None }
         let respKeys =
             { LocalStatic = v.RespStatic |> Option.map kp
               LocalEphemeral = v.RespEphemeral |> Option.map kp
               RemoteStatic = v.RespRemoteStatic
               RemoteEphemeral = None
-              Psks = v.RespPsks }
+              Psks = v.RespPsks
+              LocalHybridEphemeral = None }
 
         let init = Noise.createHandshake v.Name true v.InitPrologue initKeys
         let resp = Noise.createHandshake v.Name false v.RespPrologue respKeys
