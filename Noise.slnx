@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Noise/Noise.fsproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Noise.Tests/Noise.Tests.fsproj" />
+  </Folder>
+</Solution>

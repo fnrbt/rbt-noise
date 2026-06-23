@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RootNamespace>Noise</RootNamespace>
+    <AssemblyName>Noise</AssemblyName>
+    <Description>An implementation of the Noise Protocol Framework (rev 34) in F#. Everything except the cryptographic primitives is implemented from scratch.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Primitives.fs" />
+    <Compile Include="CipherState.fs" />
+    <Compile Include="SymmetricState.fs" />
+    <Compile Include="Patterns.fs" />
+    <Compile Include="HandshakeState.fs" />
+    <Compile Include="Protocol.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+
+</Project>
