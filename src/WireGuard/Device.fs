@@ -72,6 +72,15 @@ module private Wire =
             | 6uy when packet.Length >= 40 -> Some(IPAddress(packet.[24..39]))
             | _ -> None
 
+    /// Source address of an IPv4/IPv6 packet, if parseable.
+    let sourceOf (packet: byte[]) =
+        if packet.Length < 20 then None
+        else
+            match packet.[0] >>> 4 with
+            | 4uy -> Some(IPAddress(packet.[12..15]))
+            | 6uy when packet.Length >= 40 -> Some(IPAddress(packet.[8..23]))
+            | _ -> None
+
     /// Trim a decrypted (zero-padded) packet to its real length from the IP header.
     let trimToIpLength (packet: byte[]) =
         if packet.Length >= 20 && packet.[0] >>> 4 = 4uy then
@@ -126,6 +135,8 @@ type private Peer =
       mutable Endpoint: IPEndPoint option
       mutable Current: Session option
       mutable Previous: Session option
+      mutable Pending: Session option
+      mutable LatestTimestamp: byte[] option
       mutable Handshake: HandshakeState option
       mutable HandshakeIndex: uint32
       mutable HandshakeStarted: DateTime
@@ -163,6 +174,8 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
               Endpoint = p.Endpoint
               Current = None
               Previous = None
+              Pending = None
+              LatestTimestamp = None
               Handshake = None
               HandshakeIndex = 0u
               HandshakeStarted = DateTime.MinValue
@@ -170,6 +183,17 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
               LastSent = DateTime.MinValue
               KeepaliveDue = None
               Queued = [] })
+
+    // Ties retain configuration order, for both outbound routing and inbound ownership.
+    let findOwner (ip: IPAddress) =
+        let mutable owner = None
+        let mutable bestPrefix = -1
+        for peer in peers do
+            for (network, prefix) in peer.Config.AllowedIps do
+                if prefix > bestPrefix && Wire.inCidr ip (network, prefix) then
+                    owner <- Some peer
+                    bestPrefix <- prefix
+        owner
 
     let indexTable = Dictionary<uint32, IndexEntry>()
     let stateLock = obj ()
@@ -224,6 +248,9 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
         sendInitiation peer
 
     let installSession (peer: Peer) (session: Session) =
+        peer.Pending |> Option.iter (fun p ->
+            if p.LocalIndex <> session.LocalIndex then indexTable.Remove p.LocalIndex |> ignore)
+        peer.Pending <- None
         peer.Previous |> Option.iter (fun p -> indexTable.Remove p.LocalIndex |> ignore)
         peer.Previous <- peer.Current
         peer.Current <- Some session
@@ -262,7 +289,7 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
         | Some s when sessionValid s -> encryptTo peer s packet
         | _ ->
             peer.Queued <- (packet :: peer.Queued) |> List.truncate 16
-            if peer.Handshake.IsNone || now () - peer.HandshakeStarted > rekeyAttemptTime then
+            if peer.Pending.IsNone && (peer.Handshake.IsNone || now () - peer.HandshakeStarted > rekeyAttemptTime) then
                 startHandshake peer
 
     // ---- inbound message handling ----
@@ -283,7 +310,10 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
                     let hs =
                         Noise.createHandshake Protocol.Construction false identifier
                             { HandshakeKeys.empty with LocalStatic = Some localStatic; Psks = [ peer.Psk ] }
-                    hs.ReadMessage msg.[8..115] |> ignore
+                    let timestamp, _ = hs.ReadMessage msg.[8..115]
+                    if timestamp.Length <> 12
+                       || (peer.LatestTimestamp |> Option.exists (fun latest -> compare timestamp latest <= 0)) then
+                        invalidArg "timestamp" "Invalid or replayed handshake timestamp"
                     let noise, transport = hs.WriteMessage [||]
                     let t = Option.get transport
                     let localIndex = allocateIndex (HandshakeEntry peer)
@@ -296,9 +326,11 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
                           Established = now ()
                           IsInitiator = false
                           Confirmed = false }
+                    peer.LatestTimestamp <- Some timestamp
                     peer.Endpoint <- Some from
-                    installSession peer session
-                    flushQueued peer session
+                    peer.Pending |> Option.iter (fun p -> indexTable.Remove p.LocalIndex |> ignore)
+                    peer.Pending <- Some session
+                    indexTable.[session.LocalIndex] <- SessionEntry(peer, session)
                     let response = Array.zeroCreate 92
                     response.[0] <- Protocol.MsgResponse
                     Wire.putU32le response 4 localIndex
@@ -347,18 +379,23 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
             match indexTable.TryGetValue receiverIndex with
             | true, SessionEntry(peer, session) ->
                 let counter = Wire.getU64le msg 8
-                session.Recv.SetNonce counter
-                try
-                    let plaintext = session.Recv.DecryptWithAd([||], msg.[16..])
-                    if session.Replay.Accept counter then
-                        peer.Endpoint <- Some from
-                        if not session.Confirmed then session.Confirmed <- true
-                        if plaintext.Length = 0 then
-                            () // keepalive
-                        else
-                            tunnel.WritePacket(Wire.trimToIpLength plaintext)
-                            if peer.KeepaliveDue.IsNone then peer.KeepaliveDue <- Some(now () + keepaliveTimeout)
-                with _ -> ()
+                if now () - session.Established < rejectAfterTime && counter < rejectAfterMessages then
+                    session.Recv.SetNonce counter
+                    try
+                        let plaintext = session.Recv.DecryptWithAd([||], msg.[16..])
+                        if session.Replay.Accept counter then
+                            peer.Endpoint <- Some from
+                            if not session.Confirmed then
+                                session.Confirmed <- true
+                                installSession peer session
+                                flushQueued peer session
+                            if plaintext.Length > 0 then
+                                match Wire.sourceOf plaintext |> Option.bind findOwner with
+                                | Some owner when obj.ReferenceEquals(owner, peer) ->
+                                    tunnel.WritePacket(Wire.trimToIpLength plaintext)
+                                    if peer.KeepaliveDue.IsNone then peer.KeepaliveDue <- Some(now () + keepaliveTimeout)
+                                | _ -> ()
+                    with _ -> ()
             | _ -> ()
 
     // ---- background loops ----
@@ -385,7 +422,7 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
                 lock stateLock (fun () ->
                     match Wire.destinationOf packet with
                     | Some dst ->
-                        match peers |> List.tryFind (fun p -> p.Config.AllowedIps |> List.exists (Wire.inCidr dst)) with
+                        match findOwner dst with
                         | Some peer -> sendPacket peer packet
                         | None -> ()
                     | None -> ())
@@ -396,6 +433,15 @@ type Device(config: DeviceConfig, tunnel: ITunnel, bind: IBind) =
             lock stateLock (fun () ->
                 let t = now ()
                 for peer in peers do
+                    // An unconfirmed responder key must not strand queued packets forever.
+                    match peer.Pending with
+                    | Some s when t - s.Established >= rejectAfterTime ->
+                        indexTable.Remove s.LocalIndex |> ignore
+                        peer.Pending <- None
+                        if not peer.Queued.IsEmpty && peer.Handshake.IsNone
+                           && (peer.Current |> Option.forall (sessionValid >> not)) then
+                            startHandshake peer
+                    | _ -> ()
                     // Retransmit a pending handshake, or give up after the attempt window.
                     match peer.Handshake with
                     | Some _ ->

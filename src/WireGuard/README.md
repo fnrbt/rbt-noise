@@ -29,14 +29,20 @@ This module only adds the parts that live *outside* the Noise state machine:
 It manages, for every peer:
 
 * the **session lifecycle** — handshake on demand when there is traffic, key split
-  into transport `CipherState`s, current/previous keypairs, and rekeying;
+  into transport `CipherState`s, current/previous keypairs, and rekeying. Responder
+  keys remain pending until authenticated transport confirms them; existing keys
+  continue carrying traffic in the meantime;
 * the **timer state machine** — handshake retransmission (every `REKEY_TIMEOUT`, up to
-  `REKEY_ATTEMPT_TIME`), passive and persistent keepalives, and session expiry;
+  `REKEY_ATTEMPT_TIME`), passive and persistent keepalives, and session expiry.
+  Receiving keys reject packets at 180 seconds or counters at or above
+  `UInt64.MaxValue - 8192`;
 * **index demultiplexing** — a receiver-index table routes responses and transport
   records to the right peer/session;
-* **anti-replay** — a sliding counter window per receiving keypair;
-* **routing** — outbound IP packets are matched to a peer by allowed-IPs, inbound
-  packets are checked against them.
+* **anti-replay** — strictly increasing 12-byte initiation timestamps per peer and
+  a sliding counter window per receiving keypair;
+* **routing** — longest-prefix allowed-IPs lookup selects the outbound peer.
+  Inbound IPv4/IPv6 source addresses must resolve to the authenticated peer using
+  the same lookup, including when peers have overlapping prefixes.
 
 The data plane is abstracted behind two interfaces in `Adapters.fs`:
 
@@ -84,5 +90,7 @@ RESULT: SUCCESS — ping traversed the F# WireGuard data plane
 ```
 
 Network-free checks also run under `dotnet test`: a handshake + transport check
-(`WireGuardTests.fs`) and a two-device data-plane exchange over loopback with mock
-tunnels (`DeviceTests.fs`).
+(`WireGuardTests.fs`), a two-device data-plane exchange over loopback, and device
+regressions for IPv4/IPv6 source ownership, longest-prefix routing, handshake
+replay rejection, responder key confirmation, and receive age/counter limits
+(`DeviceTests.fs`).
